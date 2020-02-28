@@ -1,0 +1,128 @@
+---
+title: 'Humana First Round Report'
+author: "Edison Gu"
+date: "03/01/2020"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, cache = TRUE)
+library(tidyverse)
+# library(alr4)
+# library(GGally)
+# library(broom)
+# library(ggpubr)
+df <- read.table("hadCET.txt", header=TRUE)
+```
+
+## Question 1
+
+### (a)
+
+```{r 5th degree polynoial model}
+dec.year <- df$dec.year
+temp     <- df$temp
+
+sin.term <- sin(2 * pi * dec.year)
+cos.term <- cos(2 * pi * dec.year)
+
+dec.year.2 <- dec.year^2
+dec.year.3 <- dec.year^3
+dec.year.4 <- dec.year^4
+dec.year.5 <- dec.year^5
+
+model_5th <- lm(temp ~ sin.term + cos.term + 
+                     dec.year + dec.year.2 + dec.year.3 + dec.year.4 + dec.year.5)
+
+res  <- resid(model_5th)
+fits <- fitted(model_5th)
+
+par(mfrow=c(1,2), cex=0.8, mar=c(4,4,1,1), mgp=c(2,0.5,0), bty="L")
+
+plot(dec.year, res, xlab="Year", ylab="Residuals")
+abline(h=0, lty=2)
+
+plot(fits, res, xlab="Fitted values", ylab="Residuals")
+abline(h=0, lty=2)
+```
+
+Looking at residual vs year plot, it looks like the variance is consistent and no 
+systematic changes in residuals. However, there are some outliers with more negative 
+values.
+
+A further investigation is to look at residual vs fitted plot:
+
+The residual vs fitted plot appears to have fitted values clustered with relative 
+equal length intervals. There are about 12 clusters which correspond to 12 months. 
+Since months are discrete, the plot captures the residuals at around every month.
+
+It appears that there is an upward trend in residuals as fitted value increases. 
+And the variance of residuals are not consistent across all fitted values. There 
+are some outliers around the lower fitted values.
+
+All this means that the model has roughly captured the periodicity in months. However, 
+residuals are more negative and larger in magnitude at colder months, and more positive 
+at warmer months.
+
+### (b)
+
+```{r coefficient summary}
+summary(model_5th)
+```
+
+At first glimpse, the linear, qudratic, cubic and quintic terms are not significant. 
+However, with the knowledge of our in-class models, we suspect that this might be 
+caused by the addition of higher degree polynomial terms. The 5th degree term is 
+even highly correlated with another covariate and therefore undefined from this 
+`lm` function.
+
+The adjusted R-squared did not change from the 3rd degree model, meaning no or little 
+additional variability is explained by adding the 4th degree term.
+
+This model is still preferred from the intercept-only model as suggested by the model 
+F-test.
+
+```{r anova}
+anova(model_5th)
+```
+
+The sequential test suggests that adding cubic and quintic terms is not very helpful 
+in explaining additional variability.
+
+### (c)
+
+#### (i)
+
+The *Akaike Information Criterion* (AIC) is
+\[
+  AIC_{M_k} = \mbox{const.} + n \log (RSS_{M_k}/n) + 2 p_{M_k}
+\]
+- n: sample size;  
+- $RSS_{M_k}/n$: RSS for model $M_k$;  
+- $p_{M_k}$: number of parameters in mean function (including intercept).
+
+It gives a relative score to a model based on **model fit** and **measuring complexity**.
+
+Models with smaller (i.e., closer to $-\infty$) values of AIC are preferred, 
+given they are using the same constant in AIC calculation.
+
+#### (ii)
+
+```{r AIC}
+model_slr <- lm(temp ~ sin.term + cos.term + dec.year)
+model_3rd <- lm(temp ~ sin.term + cos.term + dec.year + dec.year.2 + dec.year.3)
+
+AIC(model_slr) - AIC(model_3rd)
+```
+
+Since the difference is a positive number, meaning the 3rd degree polynomial model 
+has a smaller AIC. Therefore, the 3rd degree poly. model is preferred.
+
+### (d)
+
+```{r F-test}
+anova(model_3rd, model_5th)
+```
+
+The p-value is not small enough - we fail to reject $H_0$. We can conclude that 
+the 3rd degree polynomial model is sufficient.
