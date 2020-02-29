@@ -7,37 +7,212 @@ output: html_document
 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(warning=FALSE, message=FALSE, cache = TRUE)
+
+## Load libraries
 library(tidyverse)
-library(readxl)
+library(tibble)
+library(janitor)
+
+library(lubridate)
 # library(alr4)
 # library(GGally)
 # library(broom)
 # library(ggpubr)
-demo <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
+
+## Read in data
+library(readxl)
+demo_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
      sheet = "Demographics", col_types = c("text", 
          "numeric", "numeric", "numeric", 
          "numeric", "text", "text", "text", 
          "numeric", "numeric", "text", "text"))
 
-claims <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
+claims_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
     sheet = "Claims")
 
-er <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
+er_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
     sheet = "ER Utilization")
 
-pcp <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
+pcp_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
     sheet = "PCP Visits")
 
-hospital <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
+hospital_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
     sheet = "Hospital Admissions")
 
-rx <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
+rx_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
     sheet = "Rx Utilization")
-
-claims = claims %>% mutate(id = as.character(id))
-er = er %>% mutate(id = as.character(id))
-pcp = pcp %>% mutate(id = as.character(id))
-hospital = hospital %>% mutate(id = as.character(id))
-rx = rx %>% mutate(id = as.character(id))
 ```
+
+```{r Data Transformation}
+## Format data
+claims = claims_df %>% 
+        pivot_longer(-id, names_to = "time", values_to = "claim") %>% 
+        transmute(id = as.character(id),
+               time = excel_numeric_to_date(as.numeric(time), 
+                                            date_system = "modern" ),
+               claim)
+        
+er = er_df %>% 
+        pivot_longer(-id, names_to = "time", values_to = "count") %>% 
+        transmute(id = as.character(id),
+               time = excel_numeric_to_date(as.numeric(time), 
+                                            date_system = "modern" ),
+               er_count = count)
+
+pcp = pcp_df %>% 
+        pivot_longer(-id, names_to = "time", values_to = "count") %>% 
+        transmute(id = as.character(id),
+               time = excel_numeric_to_date(as.numeric(time), 
+                                            date_system = "modern" ),
+               pcp_count = count)
+
+hospital = hospital_df %>% 
+        pivot_longer(-id, names_to = "time", values_to = "count") %>% 
+        transmute(id = as.character(id),
+               time = excel_numeric_to_date(as.numeric(time), 
+                                            date_system = "modern" ),
+               hospital_count = count)
+
+rx = rx_df %>% 
+        pivot_longer(-id, names_to = "time", values_to = "count") %>% 
+        transmute(id = as.character(id),
+               time = excel_numeric_to_date(as.numeric(time), 
+                                            date_system = "modern" ),
+               rx_count = count)
+```
+
+```{r Check the data}
+## Check: each individual either get one or none CRD
+demo_df %>% mutate(test_sum = transport + fin_assis + lonely + food_insec) %>% 
+        filter(test_sum > 1)
+
+## Check: all NAs represent people from the control group
+demo_df %>% filter(is.na(mth_out),
+                crd !=0)
+
+## Check: region
+demo_df %>% group_by(region) %>% 
+    count() %>% arrange(n) # potentially extrapolate Unknowns
+
+## Check: rural
+demo_df %>% group_by(rural) %>% 
+    count() %>% arrange(n) # potentially extrapolate Unknowns
+
+## Check: is_lowincome
+demo_df %>% group_by(is_lowincome) %>% 
+    count() %>% arrange(n) # will be careful to this
+
+## Check: age
+demo_df %>% group_by(age) %>% count() %>% filter(age<5) %>% arrange(age)
+demo_df %>% group_by(age) %>% count() %>% filter(age>95) %>% arrange(age)
+
+demo = demo_df %>% 
+        mutate(is_lowincome = demo_df$is_lowincome == "Y" |
+                   demo_df$is_lowincome == "Yes" |
+                   demo_df$is_lowincome == "YES",
+               mth_out = mdy(paste(mth_out,"1","2017")))
+
+## Add an column indicate which CRD an individual received
+crd = NA
+for(i in 1:length(demo$id)){
+        crd[i]=0
+        if(demo$transport[i] == 1){
+                crd[i] = 1
+        }
+        if(demo$fin_assis[i] == 1){
+                crd[i] = 2
+        }
+         if(demo$lonely[i] == 1){
+                crd[i] = 3
+         }
+         if(demo$food_insec[i] == 1){
+                crd[i] = 4
+         }
+}
+demo = demo %>% cbind(crd)
+
+## Join utilization tables
+util = er %>% 
+        inner_join(hospital, by = c("id"="id","time"="time")) %>% 
+        inner_join(pcp, by = c("id"="id","time"="time")) %>% 
+        inner_join(rx, by = c("id"="id","time"="time"))
+```
+
+
+
+
+
+
+```{r Basic}
+## Monthly average after outreach
+freq_after = util %>% inner_join(demo, by = "id") %>% 
+        filter(crd != 0,
+                time >= mth_out) %>% 
+        group_by(id) %>% 
+        summarize(er_rate = mean(er_count),
+                  pcp_rate = mean(pcp_count),
+                  hospital_rate = mean(hospital_count),
+                  rx_rate = mean(rx_count))
+
+agg_after = claims %>% inner_join(demo, by = "id") %>% 
+        filter(crd != 0,
+                time >= mth_out) %>% 
+        group_by(time) %>% 
+        summarize(claim = sum(claim))
+
+## Monthly rate before outreach
+freq_before = util %>% inner_join(demo, by = "id") %>% 
+        filter(crd != 0,
+                time < mth_out) %>% 
+        group_by(id) %>% 
+        summarize(er_rate = mean(er_count),
+                  pcp_rate = mean(pcp_count),
+                  hospital_rate = mean(hospital_count),
+                  rx_rate = mean(rx_count))
+
+agg_before = claims %>% inner_join(demo, by = "id") %>% 
+        filter(crd != 0,
+                time < mth_out) %>% 
+        group_by(time) %>% 
+        summarize(claim = sum(claim))
+
+## Monthly rate control
+freq_control = util %>% inner_join(demo, by = "id") %>% 
+        filter(crd == 0) %>% 
+        group_by(id) %>% 
+        summarize(er_rate = mean(er_count),
+                  pcp_rate = mean(pcp_count),
+                  hospital_rate = mean(hospital_count),
+                  rx_rate = mean(rx_count))
+
+agg_control = claims %>% inner_join(demo, by = "id") %>% 
+        filter(crd != 0,
+                time >= mth_out) %>% 
+        group_by(time) %>% 
+        summarize(claim = sum(claim))
+```
+
+```{r This block is not good}
+freq_before %>% inner_join(freq_after, by = "id") %>% 
+        ggplot()+
+        geom_freqpoly(aes(x=er_rate.x),color="blue")+
+        geom_freqpoly(aes(x=er_rate.y),color="red")
+
+freq_before %>% inner_join(freq_after, by = "id") %>% 
+        ggplot()+
+        geom_freqpoly(aes(x=pcp_rate.x),color="blue")+
+        geom_freqpoly(aes(x=pcp_rate.y),color="red")
+
+freq_before %>% inner_join(freq_after, by = "id") %>% 
+        ggplot()+
+        geom_freqpoly(aes(x=hospital_rate.x),color="blue")+
+        geom_freqpoly(aes(x=hospital_rate.y),color="red")
+
+freq_before %>% inner_join(freq_after, by = "id") %>% 
+        ggplot()+
+        geom_freqpoly(aes(x=rx_rate.x),color="blue")+
+        geom_freqpoly(aes(x=rx_rate.y),color="red")
+```
+
+
 
