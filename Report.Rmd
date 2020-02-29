@@ -205,9 +205,4 @@ loss %>% group_by(time) %>%
 
 ```
 
-```{r This block is not good, eval = F}
-
-```
-
-
 
