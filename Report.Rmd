@@ -5,18 +5,18 @@ date: "03/01/2020"
 output: html_document
 ---
 
-```{r setup, include = FALSE}
+```{r setup, include = F}
 knitr::opts_chunk$set(warning=FALSE, message=FALSE, cache = TRUE)
 
 ## Load libraries
 library(tidyverse)
 library(tibble)
 library(janitor)
-
 library(lubridate)
-library(alr4)
 library(GGally)
-library(broom)
+
+#library(alr4)
+#library(broom)
 # library(ggpubr)
 
 ## Read in data
@@ -43,7 +43,7 @@ rx_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx",
     sheet = "Rx Utilization")
 ```
 
-```{r Data Transformation}
+```{r Data Integration}
 ## Format data
 claims = claims_df %>% 
         pivot_longer(-id, names_to = "time", values_to = "claim") %>% 
@@ -79,16 +79,19 @@ rx = rx_df %>%
                time = excel_numeric_to_date(as.numeric(time), 
                                             date_system = "modern" ),
                rx_count = count)
+
+## Join utilization and claim tables
+loss = er %>% 
+    inner_join(hospital, by = c("id"="id","time"="time")) %>% 
+    inner_join(pcp, by = c("id"="id","time"="time")) %>% 
+    inner_join(rx, by = c("id"="id","time"="time")) %>% 
+    inner_join(claims, by = c("id"="id","time"="time"))
 ```
 
-```{r Check the data}
+```{r Data Cleaning}
 ## Check: each individual either get one or none CRD
-demo_df %>% mutate(test_sum = transport + fin_assis + lonely + food_insec) %>% 
+demo_df %>% mutate(test_sum = transport+fin_assis+lonely+food_insec) %>% 
         filter(test_sum > 1)
-
-## Check: all NAs represent people from the control group
-demo_df %>% filter(is.na(mth_out),
-                crd ==0)
 
 ## Check: region
 demo_df %>% group_by(region) %>% 
@@ -113,15 +116,15 @@ demo_df %>% group_by(chronic_count) %>% count() %>% arrange(chronic_count) # ass
 demo_df %>% group_by(gender) %>% count() %>% arrange(n) # will just ignore other than M, F
     
 demo = demo_df %>% 
-        mutate(is_lowincome = demo_df$is_lowincome %in% c("Y","Yes","YES"),
-               age = ifelse(age>110, age-100, abs(age)),
-               mth_out = mdy(paste(mth_out,"1","2017")),
-               chronic_count = ifelse(chronic_count>=10,
-                                      chronic_count-10,
-                                      chronic_count)) %>% 
+    mutate(is_lowincome = demo_df$is_lowincome %in% c("Y","Yes","YES"),
+           age = ifelse(age>110, age-100, abs(age)),
+           mth_out = decimal_date(mdy(paste(mth_out,"1","2017"))),
+           chronic_count = ifelse(chronic_count>=10,
+                                  chronic_count-10,
+                                  chronic_count)) %>% 
     filter(region != "Unknown" & rural != "Unknown" & gender %in% c("M","F"))
 
-## Add an column indicate which CRD an individual received
+## Add a column indicate which CRD an individual received
 crd = NA
 for(i in 1:length(demo$id)){
         crd[i]=0
@@ -140,31 +143,51 @@ for(i in 1:length(demo$id)){
 }
 demo = demo %>% cbind(crd)
 
-## Join utilization tables
-util = er %>% 
-        inner_join(hospital, by = c("id"="id","time"="time")) %>% 
-        inner_join(pcp, by = c("id"="id","time"="time")) %>% 
-        inner_join(rx, by = c("id"="id","time"="time"))
+## Check: all NAs represent people from the control group
+demo_df %>% filter(is.na(mth_out),
+                crd ==0)
+
+## Convert date to decimal year
+loss = loss %>% mutate(time = decimal_date(time))
+
+## Add a
 ```
 
-
-```{r visualization EDA}
-## Visualize the age dist.
-demo %>% group_by(age) %>% count() %>% arrange(age) %>% ggplot(aes(x=age,y=n))+geom_col()
-
-demo %>% ggpairs(
-    demo %>% select(region,rural,is_lowincome,age,chronic_count,gender,mth_out))
-
-demo %>% ggpairs(
-    demo %>% select(age))
+```{r Data Reduction}
+demo = demo %>% 
+    select(id,region,rural,is_lowincome,age,chronic_count,gender,mth_out,crd)
+remove(claims,claims_df,demo_df,er,er_df,hospital,hospital_df,pcp,pcp_df,rx,rx_df,crd,i)
 ```
 
+```{r Visualization EDA, eval = F}
+## Pair-wise relationship in demo
+demo %>% select(-id) %>% ggpairs()
 
+## Average utilization (aka # of claims) across the entire population over time
+loss %>% group_by(time) %>% 
+    summarize(a=mean(er_count),b=mean(hospital_count),c=mean(pcp_count),d=mean(rx_count))%>% 
+    ggplot() +
+    geom_line(aes(x=time,y=a),color="red",size=1.5)+
+    geom_line(aes(x=time,y=b),color="blue",size=1.5)+
+    geom_line(aes(x=time,y=c),color="green",size=1.5)+
+    geom_line(aes(x=time,y=d),color="black",size=1.5)+
+    geom_smooth(aes(x=time,y=a),color="black",method="lm",size=0.5)+
+    geom_smooth(aes(x=time,y=b),color="black",method="lm",size=0.5)+
+    geom_smooth(aes(x=time,y=c),color="black",method="lm",size=0.5)+
+    geom_smooth(aes(x=time,y=d),color="black",method="lm",size=0.5)
+```
 
+```{r Data Transformation, eval=F}
+## frequency
+n_bef = loss %>% inner_join(demo, by = "id") %>% 
+        filter(crd != 0, time < mth_out) %>% 
+        group_by(id) %>% 
+        summarize(er_rate = mean(er_count),
+                  pcp_rate = mean(pcp_count),
+                  hospital_rate = mean(hospital_count),
+                  rx_rate = mean(rx_count))
 
-```{r Basis}
-## Monthly average after outreach
-freq_after = util %>% inner_join(demo, by = "id") %>% 
+n_aft = util %>% inner_join(demo, by = "id") %>% 
         filter(crd != 0,
                 time >= mth_out) %>% 
         group_by(id) %>% 
@@ -180,14 +203,7 @@ agg_after = claims %>% inner_join(demo, by = "id") %>%
         summarize(claim = sum(claim))
 
 ## Monthly rate before outreach
-freq_before = util %>% inner_join(demo, by = "id") %>% 
-        filter(crd != 0,
-                time < mth_out) %>% 
-        group_by(id) %>% 
-        summarize(er_rate = mean(er_count),
-                  pcp_rate = mean(pcp_count),
-                  hospital_rate = mean(hospital_count),
-                  rx_rate = mean(rx_count))
+
 
 agg_before = claims %>% inner_join(demo, by = "id") %>% 
         filter(crd != 0,
@@ -211,7 +227,7 @@ agg_control = claims %>% inner_join(demo, by = "id") %>%
         summarize(claim = sum(claim))
 ```
 
-```{r This block is not good}
+```{r This block is not good, eval = F}
 freq_before %>% inner_join(freq_after, by = "id") %>% 
         ggplot()+
         geom_freqpoly(aes(x=er_rate.x),color="blue")+
