@@ -46,11 +46,11 @@ rx_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx",
 ```{r Data Integration}
 ## Format data
 claims = claims_df %>% 
-        pivot_longer(-id, names_to = "time", values_to = "claim") %>% 
+        pivot_longer(-id, names_to = "time", values_to = "agg_claim") %>% 
         transmute(id = as.character(id),
                time = excel_numeric_to_date(as.numeric(time), 
                                             date_system = "modern" ),
-               claim)
+               agg_claim)
         
 er = er_df %>% 
         pivot_longer(-id, names_to = "time", values_to = "count") %>% 
@@ -85,7 +85,9 @@ loss = er %>%
     inner_join(hospital, by = c("id"="id","time"="time")) %>% 
     inner_join(pcp, by = c("id"="id","time"="time")) %>% 
     inner_join(rx, by = c("id"="id","time"="time")) %>% 
-    inner_join(claims, by = c("id"="id","time"="time"))
+    inner_join(claims, by = c("id"="id","time"="time")) %>% 
+    mutate(total_count = er_count+hospital_count+pcp_count+rx_count,
+           avg_claim = ifelse(agg_claim*total_count!=0,agg_claim/total_count,0))
 ```
 
 ```{r Data Cleaning}
@@ -149,8 +151,6 @@ demo_df %>% filter(is.na(mth_out),
 
 ## Convert date to decimal year
 loss = loss %>% mutate(time = decimal_date(time))
-
-## Add a
 ```
 
 ```{r Data Reduction}
@@ -159,94 +159,54 @@ demo = demo %>%
 remove(claims,claims_df,demo_df,er,er_df,hospital,hospital_df,pcp,pcp_df,rx,rx_df,crd,i)
 ```
 
-```{r Visualization EDA, eval = F}
+```{r Data Integration & Reduction 2}
+## Join demo(features) with loss(responses)
+impact = demo %>% inner_join(loss)
+
+## Add a column to indicate if row is after_crd
+impact = impact %>% 
+    mutate(after_crd = ifelse(!is.na(mth_out),time >= mth_out,NA))
+
+impact = impact %>% select(-mth_out)
+```
+
+```{r Visualization EDA, eval = T}
 ## Pair-wise relationship in demo
 demo %>% select(-id) %>% ggpairs()
 
 ## Average utilization (aka # of claims) across the entire population over time
 loss %>% group_by(time) %>% 
-    summarize(a=mean(er_count),b=mean(hospital_count),c=mean(pcp_count),d=mean(rx_count))%>% 
+    summarize(a=mean(er_count),b=mean(hospital_count),
+              c=mean(pcp_count),d=mean(rx_count),e=mean(total_count))%>% 
     ggplot() +
     geom_line(aes(x=time,y=a),color="red",size=1.5)+
     geom_line(aes(x=time,y=b),color="blue",size=1.5)+
     geom_line(aes(x=time,y=c),color="green",size=1.5)+
     geom_line(aes(x=time,y=d),color="black",size=1.5)+
+    geom_line(aes(x=time,y=e),color="magenta",size=1.5)+
     geom_smooth(aes(x=time,y=a),color="black",method="lm",size=0.5)+
     geom_smooth(aes(x=time,y=b),color="black",method="lm",size=0.5)+
     geom_smooth(aes(x=time,y=c),color="black",method="lm",size=0.5)+
-    geom_smooth(aes(x=time,y=d),color="black",method="lm",size=0.5)
+    geom_smooth(aes(x=time,y=d),color="black",method="lm",size=0.5)+
+    geom_smooth(aes(x=time,y=e),color="black",method="lm",size=0.5)
+
+## Average utilization (aka # of claims) across the entire population over time
+loss %>% group_by(time) %>% 
+    summarize(avg_agg_claim=mean(agg_claim),avg_avg_claim=mean(avg_claim))%>% 
+    ggplot() +
+    geom_line(aes(x=time,y=avg_agg_claim),color="red",size=1.5)+
+    geom_line(aes(x=time,y=avg_avg_claim),color="blue",size=1.5)+
+    geom_smooth(aes(x=time,y=avg_agg_claim),color="black",method="lm",size=0.5)+
+    geom_smooth(aes(x=time,y=avg_avg_claim),color="black",method="lm",size=0.5)
 ```
 
-```{r Data Transformation, eval=F}
-## frequency
-n_bef = loss %>% inner_join(demo, by = "id") %>% 
-        filter(crd != 0, time < mth_out) %>% 
-        group_by(id) %>% 
-        summarize(er_rate = mean(er_count),
-                  pcp_rate = mean(pcp_count),
-                  hospital_rate = mean(hospital_count),
-                  rx_rate = mean(rx_count))
+```{r Build model for before and after outreach, eval=T}
+## frequency model
 
-n_aft = util %>% inner_join(demo, by = "id") %>% 
-        filter(crd != 0,
-                time >= mth_out) %>% 
-        group_by(id) %>% 
-        summarize(er_rate = mean(er_count),
-                  pcp_rate = mean(pcp_count),
-                  hospital_rate = mean(hospital_count),
-                  rx_rate = mean(rx_count))
-
-agg_after = claims %>% inner_join(demo, by = "id") %>% 
-        filter(crd != 0,
-                time >= mth_out) %>% 
-        group_by(time) %>% 
-        summarize(claim = sum(claim))
-
-## Monthly rate before outreach
-
-
-agg_before = claims %>% inner_join(demo, by = "id") %>% 
-        filter(crd != 0,
-                time < mth_out) %>% 
-        group_by(time) %>% 
-        summarize(claim = sum(claim))
-
-## Monthly rate control
-freq_control = util %>% inner_join(demo, by = "id") %>% 
-        filter(crd == 0) %>% 
-        group_by(id) %>% 
-        summarize(er_rate = mean(er_count),
-                  pcp_rate = mean(pcp_count),
-                  hospital_rate = mean(hospital_count),
-                  rx_rate = mean(rx_count))
-
-agg_control = claims %>% inner_join(demo, by = "id") %>% 
-        filter(crd != 0,
-                time >= mth_out) %>% 
-        group_by(time) %>% 
-        summarize(claim = sum(claim))
 ```
 
 ```{r This block is not good, eval = F}
-freq_before %>% inner_join(freq_after, by = "id") %>% 
-        ggplot()+
-        geom_freqpoly(aes(x=er_rate.x),color="blue")+
-        geom_freqpoly(aes(x=er_rate.y),color="red")
 
-freq_before %>% inner_join(freq_after, by = "id") %>% 
-        ggplot()+
-        geom_freqpoly(aes(x=pcp_rate.x),color="blue")+
-        geom_freqpoly(aes(x=pcp_rate.y),color="red")
-
-freq_before %>% inner_join(freq_after, by = "id") %>% 
-        ggplot()+
-        geom_freqpoly(aes(x=hospital_rate.x),color="blue")+
-        geom_freqpoly(aes(x=hospital_rate.y),color="red")
-
-freq_before %>% inner_join(freq_after, by = "id") %>% 
-        ggplot()+
-        geom_freqpoly(aes(x=rx_rate.x),color="blue")+
-        geom_freqpoly(aes(x=rx_rate.y),color="red")
 ```
 
 
