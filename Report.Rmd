@@ -14,9 +14,9 @@ library(tibble)
 library(janitor)
 
 library(lubridate)
-# library(alr4)
-# library(GGally)
-# library(broom)
+library(alr4)
+library(GGally)
+library(broom)
 # library(ggpubr)
 
 ## Read in data
@@ -88,29 +88,38 @@ demo_df %>% mutate(test_sum = transport + fin_assis + lonely + food_insec) %>%
 
 ## Check: all NAs represent people from the control group
 demo_df %>% filter(is.na(mth_out),
-                crd !=0)
+                crd ==0)
 
 ## Check: region
 demo_df %>% group_by(region) %>% 
-    count() %>% arrange(n) # potentially extrapolate Unknowns
+    count() %>% arrange(n) # unknown small, ignore
 
 ## Check: rural
 demo_df %>% group_by(rural) %>% 
-    count() %>% arrange(n) # potentially extrapolate Unknowns
+    count() %>% arrange(n) # unknown small, ignore
 
 ## Check: is_lowincome
 demo_df %>% group_by(is_lowincome) %>% 
-    count() %>% arrange(n) # will be careful to this
+    count() %>% arrange(n) # inconsistant label, need to fix
 
 ## Check: age
-demo_df %>% group_by(age) %>% count() %>% filter(age<5) %>% arrange(age)
-demo_df %>% group_by(age) %>% count() %>% filter(age>95) %>% arrange(age)
+demo_df %>% group_by(age) %>% count() %>% filter(age<5) %>% arrange(age) # need to correct negative values, assume mistyped minues sign
+demo_df %>% group_by(age) %>% count() %>% filter(age>95) %>% arrange(age) # need to correct >100 values, assume mistyped a 1 in the front
 
+## Check: chronic_count
+demo_df %>% group_by(chronic_count) %>% count() %>% arrange(chronic_count) # assume mistyped a 1 in the front
+
+## Check: gender
+demo_df %>% group_by(gender) %>% count() %>% arrange(n) # will just ignore other than M, F
+    
 demo = demo_df %>% 
-        mutate(is_lowincome = demo_df$is_lowincome == "Y" |
-                   demo_df$is_lowincome == "Yes" |
-                   demo_df$is_lowincome == "YES",
-               mth_out = mdy(paste(mth_out,"1","2017")))
+        mutate(is_lowincome = demo_df$is_lowincome %in% c("Y","Yes","YES"),
+               age = ifelse(age>110, age-100, abs(age)),
+               mth_out = mdy(paste(mth_out,"1","2017")),
+               chronic_count = ifelse(chronic_count>=10,
+                                      chronic_count-10,
+                                      chronic_count)) %>% 
+    filter(region != "Unknown" & rural != "Unknown" & gender %in% c("M","F"))
 
 ## Add an column indicate which CRD an individual received
 crd = NA
@@ -139,11 +148,21 @@ util = er %>%
 ```
 
 
+```{r visualization EDA}
+## Visualize the age dist.
+demo %>% group_by(age) %>% count() %>% arrange(age) %>% ggplot(aes(x=age,y=n))+geom_col()
+
+demo %>% ggpairs(
+    demo %>% select(region,rural,is_lowincome,age,chronic_count,gender,mth_out))
+
+demo %>% ggpairs(
+    demo %>% select(age))
+```
 
 
 
 
-```{r Basic}
+```{r Basis}
 ## Monthly average after outreach
 freq_after = util %>% inner_join(demo, by = "id") %>% 
         filter(crd != 0,
