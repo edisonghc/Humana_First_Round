@@ -1,49 +1,49 @@
-claims %>% inner_join(demo, by = "id") %>% 
-        filter(crd == 0,
-               claim<40000) %>% 
-        group_by(id) %>% 
-        ggplot() +
-        geom_line(aes(x=time,y=claim))
+a = impact %>% 
+        filter(after_crd==F) %>% 
+        group_by(mth_out,time) %>% 
+        summarize(monthly_total_count = mean(total_count),
+                  monthly_agg_claim = mean(agg_claim),
+                  monthly_avg_claim = mean(avg_claim)) 
+b = impact %>% 
+        filter(after_crd==T) %>% 
+        group_by(mth_out,time) %>% 
+        summarize(monthly_total_count = mean(total_count),
+                  monthly_agg_claim = mean(agg_claim),
+                  monthly_avg_claim = mean(avg_claim)) 
 
-claims %>% 
-        filter(claim<10000) %>% 
-        ggplot() +
-        geom_freqpoly(aes(x=claim))
+c = impact %>% 
+        filter(is.na(after_crd)) %>% 
+        group_by(mth_out,time) %>% 
+        summarize(monthly_total_count = mean(total_count),
+                  monthly_agg_claim = mean(agg_claim),
+                  monthly_avg_claim = mean(avg_claim)) 
 
-claims %>% summary()
+ggplot(mapping = aes(x=time,y=monthly_total_count,color=factor(mth_out)))+
+        #geom_point(data=a)+
+        geom_smooth(data=a,method="lm",se=F)+
+        #geom_point(data=b)+
+        geom_smooth(data=b,method="lm",se=F)+
+        geom_smooth(data=c,se=T)
 
-demo %>% filter(id=="105351206627")
+out = sort(unique(impact$mth_out))
+before=NA
+after=NA
+for(i in 1:length(out)){
+        tmp = impact %>% filter(mth_out==out[i])
+        before = tmp %>% filter(after_crd==F)
+        write.csv(before,paste('before_received_crd_in_month_',i,'.csv'))
+        after = tmp %>% filter(after_crd==T)
+        write.csv(before,paste('after_received_crd_in_month_',i,'.csv'))
+}
 
-demo %>% ggplot() +
-        geom_bar(aes(x = factor(crd)))
-
-
-##
-demo %>% mutate(test_sum = transport + fin_assis + lonely + food_insec) %>% 
-        filter(test_sum > 1)
-
-## Check: all NAs represent people from the control group
-demo %>% filter(is.na(mth_out),
-                   crd ==0)
-
-## Check: region
-demo %>% group_by(region) %>% 
-        count() %>% arrange(n) # potentially extrapolate Unknowns
-
-## Check: rural
-demo_df %>% group_by(rural) %>% 
-        count() %>% arrange(n) # potentially extrapolate Unknowns
-
-## Check: is_lowincome
-demo_df %>% group_by(is_lowincome) %>% 
-        count() %>% arrange(n) # will be careful to this
-
-## Check: age
-demo_df %>% group_by(age) %>% count() %>% filter(age<5) %>% arrange(age) # will correct negative entries
-demo_df %>% group_by(age) %>% count() %>% filter(age>95) %>% arrange(age) # will correct over 110 entries
-
-## Check: chronic_count
-demo_df %>% group_by(chronic_count) %>% count() %>% arrange(chronic_count) # will correct 10 and 11
-
-## Check: gender
-demo_df %>% group_by(gender) %>% count() %>% arrange(n) # will just ignore other than M, F
+out = sort(unique(impact$mth_out))
+before=list()
+after=list()
+for(i in 1:length(out)){
+        tmp = impact %>% filter(mth_out==out[i])
+        before[[i]] = tmp %>% filter(after_crd==F)
+        #write.csv(before[[i]],paste('before_received_crd_in_month_',i,'.csv'))
+        after[[i]] = tmp %>% filter(after_crd==T)
+        #rite.csv(after[[i]],paste('after_received_crd_in_month_',i,'.csv'))
+}
+control = impact %>% filter(is.na(mth_out))

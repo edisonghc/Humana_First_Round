@@ -14,6 +14,7 @@ library(tibble)
 library(janitor)
 library(lubridate)
 library(GGally)
+library(ggridges)
 
 #library(alr4)
 #library(broom)
@@ -42,6 +43,8 @@ hospital_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx",
 rx_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
     sheet = "Rx Utilization")
 ```
+
+## Data Preparation
 
 ```{r Data Integration}
 ## Format data
@@ -79,18 +82,22 @@ rx = rx_df %>%
                time = excel_numeric_to_date(as.numeric(time), 
                                             date_system = "modern" ),
                rx_count = count)
-
-## Join utilization and claim tables
-loss = er %>% 
-    inner_join(hospital, by = c("id"="id","time"="time")) %>% 
-    inner_join(pcp, by = c("id"="id","time"="time")) %>% 
-    inner_join(rx, by = c("id"="id","time"="time")) %>% 
-    inner_join(claims, by = c("id"="id","time"="time")) %>% 
-    mutate(total_count = er_count+hospital_count+pcp_count+rx_count,
-           avg_claim = ifelse(agg_claim*total_count!=0,agg_claim/total_count,0))
 ```
 
 ```{r Data Cleaning}
+## Check counts
+er %>% group_by(er_count) %>% 
+    count() %>% arrange()
+pcp %>% group_by(pcp_count) %>% 
+    count() %>% arrange()
+hospital %>% group_by(hospital_count) %>% 
+    count() %>% arrange()
+rx %>% group_by(rx_count) %>% 
+    count() %>% arrange()
+claims %>% group_by(agg_claim) %>% 
+    count() %>% arrange() # assume mistyped a minus sign in front
+
+
 ## Check: each individual either get one or none CRD
 demo_df %>% mutate(test_sum = transport+fin_assis+lonely+food_insec) %>% 
         filter(test_sum > 1)
@@ -149,17 +156,27 @@ demo = demo %>% cbind(crd)
 demo_df %>% filter(is.na(mth_out),
                 crd ==0)
 
-## Convert date to decimal year
-loss = loss %>% mutate(time = decimal_date(time))
-```
-
-```{r Data Reduction}
-demo = demo %>% 
-    select(id,region,rural,is_lowincome,age,chronic_count,gender,mth_out,crd)
-remove(claims,claims_df,demo_df,er,er_df,hospital,hospital_df,pcp,pcp_df,rx,rx_df,crd,i)
 ```
 
 ```{r Data Integration & Reduction 2}
+## Join utilization and claim tables
+loss = er %>% 
+    inner_join(hospital, by = c("id"="id","time"="time")) %>% 
+    inner_join(pcp, by = c("id"="id","time"="time")) %>% 
+    inner_join(rx, by = c("id"="id","time"="time")) %>% 
+    mutate(total_count = er_count+hospital_count+pcp_count+rx_count) %>% 
+    inner_join(claims, by = c("id"="id","time"="time")) %>% 
+    mutate(agg_claim = abs(agg_claim),
+           avg_claim = ifelse(agg_claim*total_count!=0,agg_claim/total_count,0))
+
+## Convert date to decimal year
+loss = loss %>% mutate(time = decimal_date(time))
+
+## Reduction
+demo = demo %>% 
+    select(id,region,rural,is_lowincome,age,chronic_count,gender,mth_out,crd)
+remove(claims,claims_df,demo_df,er,er_df,hospital,hospital_df,pcp,pcp_df,rx,rx_df,crd,i)
+
 ## Join demo(features) with loss(responses)
 impact = demo %>% inner_join(loss)
 
@@ -167,8 +184,10 @@ impact = demo %>% inner_join(loss)
 impact = impact %>% 
     mutate(after_crd = ifelse(!is.na(mth_out),time >= mth_out,NA))
 
-impact = impact %>% select(-mth_out)
+#impact = impact %>% select(-mth_out)
 ```
+
+## Exploratory Data Analysis
 
 ```{r Visualization EDA, eval = T}
 ## Pair-wise relationship in demo
@@ -200,9 +219,196 @@ loss %>% group_by(time) %>%
     geom_smooth(aes(x=time,y=avg_avg_claim),color="black",method="lm",size=0.5)
 ```
 
-```{r Build model for before and after outreach, eval=T}
-## frequency model
+```{r Separate the data}
+out = sort(unique(impact$mth_out))
+before=list()
+after=list()
+for(i in 1:length(out)){
+        tmp = impact %>% filter(mth_out==out[i])
+        before[[i]] = tmp %>% filter(after_crd==F)
+        #write.csv(before[[i]],paste('before_received_crd_in_month_',i,'.csv'))
+        after[[i]] = tmp %>% filter(after_crd==T)
+        #rite.csv(after[[i]],paste('after_received_crd_in_month_',i,'.csv'))
+}
+control = impact %>% filter(is.na(mth_out))
+```
+
+## Misc.
+
+```{r important discovery}
+tmp = control
+
+log_claim = log(tmp$agg_claim)
+
+#tmp %>% ggplot() + geom_density(aes(x=log_claim))
+#tmp %>% ggplot() + geom_bar(aes(x=total_count))
+tmp %>% ggplot() + geom_point(aes(x=time,y=log_claim,color=factor(er_count)),alpha=0.1)
+tmp %>% ggplot() + geom_point(aes(x=time,y=log_claim,color=factor(hospital_count)),alpha=0.1)
+tmp %>% ggplot() + geom_point(aes(x=time,y=log_claim,color=factor(rx_count)),alpha=0.3)
+tmp %>% ggplot() + geom_point(aes(x=time,y=log_claim,color=factor(pcp_count)),alpha=0.3)
+
+ggplot(data = tmp) +
+    geom_point(mapping = aes(x = time, y = log_claim),alpha=0.1) + 
+    facet_grid(rows = vars(er_count), cols = vars(hospital_count))
+```
+
+```{r}
+tmp = control
+
+log_claim = log(tmp$agg_claim)
+
+#tmp %>% ggplot() + geom_density(aes(x=log_claim))
+#tmp %>% ggplot() + geom_bar(aes(x=total_count))
+
+
+tmp %>% filter(er_count>0) %>% 
+    ggplot() + geom_point(aes(x=time,y=log(agg_claim),color=factor(er_count)),alpha=0.3) + ylim(4,10)
+tmp %>% filter(hospital_count>0) %>% 
+    ggplot() + geom_point(aes(x=time,y=log(agg_claim),color=factor(hospital_count)),alpha=0.3)+ ylim(4,10)
+tmp %>% filter(rx_count>0) %>% 
+    ggplot() + geom_point(aes(x=time,y=log(agg_claim),color=factor(rx_count)),alpha=0.3)+ ylim(4,10)
+tmp %>% filter(pcp_count>0) %>% 
+    ggplot() + geom_point(aes(x=time,y=log(agg_claim),color=factor(pcp_count)),alpha=0.3)+ ylim(4,10)
+
+ggplot(data = tmp) +
+    geom_point(mapping = aes(x = time, y = log_claim),alpha=0.1) + 
+    facet_grid(rows = vars(er_count), cols = vars(rx_count))
+ggplot(data = tmp) +
+    geom_point(mapping = aes(x = time, y = log_claim),alpha=0.1) + 
+    facet_grid(rows = vars(rx_count), cols = vars(er_count))
+```
+```{r}
+tmp = control
+er_claim=0
+hospital_claim=0
+pcp_claim=0
+rx_claim=0
+er_claim = ifelse((er_count>0)&(hospital_count*pcp_count*rx_count==0),
+                                       agg_claim/er_count,
+                                       avg_claim)
+hospital_claim = ifelse((hospital_count>0)&(er_count*pcp_count*rx_count==0),
+                                       agg_claim/hospital_count,
+                                       avg_claim)
+pcp_claim = ifelse((pcp_count>0)&(er_count*hospital_count*rx_count==0),
+                                       agg_claim/pcp_count,
+                                       avg_claim)
+rx_claim = ifelse((rx_count>0)&(hospital_count*pcp_count*pcp_count==0),
+                                       agg_claim/rx_count,
+                                       avg_claim)
+tmp = tmp %>% cbind(er_claim,hospital_claim,pcp_claim,rx_claim)
+log_claim = log(tmp$agg_claim)
+#sort(((tmp$er_claim)),decreasing =T)
+tmp %>% ggplot() + geom_point(aes(x=time,y=log(er_claim),color=factor(er_count)),alpha=0.1)+ ylim(4,10)
+tmp %>% ggplot() + geom_point(aes(x=time,y=log(hospital_claim),color=factor(hospital_count)),alpha=0.1)+ ylim(4,10)
+tmp %>% ggplot() + geom_point(aes(x=time,y=log(rx_claim),color=factor(rx_count)),alpha=0.3)+ ylim(4,10)
+tmp %>% ggplot() + geom_point(aes(x=time,y=log(pcp_claim),color=factor(pcp_count)),alpha=0.3)+ ylim(4,10)
+```
+
+```{r}
+attach(control)
+tmp = control
+model1 = lm(log(agg_claim+1)~er_count*hospital_count*rx_count*pcp_count+
+                time+gender+age*factor(chronic_count))
+summary(model1)
+tmp = tmp %>% cbind(fit = fitted(model1),res = residuals(model1))
+
+ggplot(data=tmp) + geom_point(mapping=aes(x=fit,y=res,color=region),alpha=0.5)
+
+ggplot(data=tmp) + geom_boxplot(mapping=aes(x=factor(chronic_count),y=res))
+ggplot(data=tmp) + geom_boxplot(mapping=aes(x=factor(age),y=res))
+
+ggplot(data=tmp,mapping=aes(x=age,y=res)) + geom_point(alpha=0.1)
+ggplot(data=tmp,mapping=aes(x=factor(chronic_count),y=res)) + geom_jitter(alpha=0.1)
+
+
+ggplot(data = tmp) +
+    geom_point(mapping = aes(x = fit, y = res),alpha=0.1) + 
+    facet_grid(rows = vars(cut(age,c(0,20,40,60,80,100,120))), cols = vars(factor(chronic_count)))
+
+
+ggplot(data=tmp) + geom_jitter(mapping=aes(x=age,y=factor(chronic_count)),alpha=0.1)
+
+ggplot(data=tmp) + geom_density(aes(x=age))
+ggplot(data=tmp) + geom_bar(aes(x=factor(chronic_count)))
+```
+
+
+```{r Build model for before and after outreach, eval=F}
+attach(impact)
+tmp = impact
+sin_term = sin(2*pi*impact$time)
+cos_term = cos(2*pi*impact$time)
+time_sq <- impact$time^2 # will use later
+time_cu <- impact$time^3 # will use later
+
+## Frequency model
+model_total_count = glm(total_count ~ sin_term + cos_term + time + 
+                           region + rural + is_lowincome + age + 
+                           chronic_count + factor(crd),
+                        family = poisson)
+model1 = model_total_count
+summary(model1)
+tmp = tmp %>% cbind(fit = fitted(model1),res = residuals(model1))
+#ggplot(data=tmp) + geom_point(mapping=aes(x=fit,y=res,color=factor(crd)))
+#ggplot(data=tmp) + geom_point(mapping=aes(x=fit,y=res,color=factor(region)))
 
 ```
 
+```{r calculate monthly avg for before and after}
+impact %>% 
+    group_by(after_crd,time) %>% 
+    summarize(monthly_total_count = mean(total_count),
+              monthly_agg_claim = mean(agg_claim),
+              monthly_avg_claim = mean(avg_claim)) %>%
+    ggplot(aes(x=time,y=monthly_total_count,color=after_crd))+
+    geom_point()+
+    geom_smooth(method="lm")
+
+impact %>% 
+    group_by(after_crd,time) %>% 
+    summarize(monthly_total_count = mean(total_count),
+              monthly_agg_claim = mean(agg_claim),
+              monthly_avg_claim = mean(avg_claim)) %>%
+    ggplot(aes(x=time,y=monthly_agg_claim,color=after_crd))+
+    geom_point()+
+    geom_smooth(method="lm")
+
+impact %>% 
+    group_by(after_crd,time) %>% 
+    summarize(monthly_total_count = mean(total_count),
+              monthly_agg_claim = mean(agg_claim),
+              monthly_avg_claim = mean(avg_claim)) %>%
+    ggplot(aes(x=time,y=monthly_avg_claim,color=after_crd))+
+    geom_point()+
+    geom_smooth(method="lm")
+```
+
+```{r}
+a = impact %>% 
+        filter(after_crd==F) %>% 
+        group_by(mth_out,time) %>% 
+        summarize(monthly_total_count = mean(total_count),
+                  monthly_agg_claim = mean(agg_claim),
+                  monthly_avg_claim = mean(avg_claim)) 
+b = impact %>% 
+        filter(after_crd==T) %>% 
+        group_by(mth_out,time) %>% 
+        summarize(monthly_total_count = mean(total_count),
+                  monthly_agg_claim = mean(agg_claim),
+                  monthly_avg_claim = mean(avg_claim)) 
+
+c = impact %>% 
+        filter(is.na(after_crd)) %>% 
+        group_by(mth_out,time) %>% 
+        summarize(monthly_total_count = mean(total_count),
+                  monthly_agg_claim = mean(agg_claim),
+                  monthly_avg_claim = mean(avg_claim)) 
+
+ggplot(mapping = aes(x=time,y=monthly_total_count,color=factor(mth_out)))+
+        #geom_point(data=a)+
+        geom_smooth(data=a,method="lm",se=F)+
+        #geom_point(data=b)+
+        geom_smooth(data=b,method="lm",se=F)+
+        geom_smooth(data=c,se=T)
+```
 
