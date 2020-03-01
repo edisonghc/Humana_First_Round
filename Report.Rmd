@@ -228,9 +228,10 @@ for(i in 1:length(out)){
         before[[i]] = tmp %>% filter(after_crd==F)
         #write.csv(before[[i]],paste('before_received_crd_in_month_',i,'.csv'))
         after[[i]] = tmp %>% filter(after_crd==T)
-        #rite.csv(after[[i]],paste('after_received_crd_in_month_',i,'.csv'))
+        #write.csv(after[[i]],paste('after_received_crd_in_month_',i,'.csv'))
 }
 control = impact %>% filter(is.na(mth_out))
+#write.csv(control,paste('control.csv'))
 ```
 
 ## Misc.
