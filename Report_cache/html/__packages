@@ -12,3 +12,9 @@ janitor
 lubridate
 GGally
 readxl
+ggridges
+magrittr
+ggpubr
+broom
+tree
+C50

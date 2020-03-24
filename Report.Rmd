@@ -14,12 +14,14 @@ library(tibble)
 library(janitor)
 library(lubridate)
 library(GGally)
-library(ggridges)
-
+library(ggpubr)
+library(broom)
+library(tree)
+library(C50)
 #library(alr4)
-#library(broom)
-# library(ggpubr)
+```
 
+```{r Read in data}
 ## Read in data
 library(readxl)
 demo_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
@@ -43,6 +45,7 @@ hospital_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx",
 rx_df <- read_excel("Humana Case 2020 Q1 -- Data.xlsx", 
     sheet = "Rx Utilization")
 ```
+
 
 ## Data Preparation
 
@@ -153,9 +156,8 @@ for(i in 1:length(demo$id)){
 demo = demo %>% cbind(crd)
 
 ## Check: all NAs represent people from the control group
-demo_df %>% filter(is.na(mth_out),
-                crd ==0)
-
+demo %>% filter(is.na(mth_out),
+                crd !=0)
 ```
 
 ```{r Data Integration & Reduction 2}
@@ -178,7 +180,7 @@ demo = demo %>%
 remove(claims,claims_df,demo_df,er,er_df,hospital,hospital_df,pcp,pcp_df,rx,rx_df,crd,i)
 
 ## Join demo(features) with loss(responses)
-impact = demo %>% inner_join(loss)
+impact = demo %>% inner_join(loss, by = "id")
 
 ## Add a column to indicate if row is after_crd
 impact = impact %>% 
@@ -189,7 +191,7 @@ impact = impact %>%
 
 ## Exploratory Data Analysis
 
-```{r Visualization EDA, eval = T}
+```{r Visualization EDA, eval = F}
 ## Pair-wise relationship in demo
 demo %>% select(-id) %>% ggpairs()
 
@@ -219,7 +221,7 @@ loss %>% group_by(time) %>%
     geom_smooth(aes(x=time,y=avg_avg_claim),color="black",method="lm",size=0.5)
 ```
 
-```{r Separate the data}
+```{r Separate the data, eval = F}
 out = sort(unique(impact$mth_out))
 before=list()
 after=list()
@@ -230,13 +232,14 @@ for(i in 1:length(out)){
         after[[i]] = tmp %>% filter(after_crd==T)
         #write.csv(after[[i]],paste('after_received_crd_in_month_',i,'.csv'))
 }
+not_control = impact %>% filter(!is.na(mth_out))
 control = impact %>% filter(is.na(mth_out))
 #write.csv(control,paste('control.csv'))
 ```
 
 ## Misc.
 
-```{r important discovery}
+```{r important discovery, eval=F}
 tmp = control
 
 log_claim = log(tmp$agg_claim)
@@ -253,7 +256,7 @@ ggplot(data = tmp) +
     facet_grid(rows = vars(er_count), cols = vars(hospital_count))
 ```
 
-```{r}
+```{r, eval=F}
 tmp = control
 
 log_claim = log(tmp$agg_claim)
@@ -278,7 +281,8 @@ ggplot(data = tmp) +
     geom_point(mapping = aes(x = time, y = log_claim),alpha=0.1) + 
     facet_grid(rows = vars(rx_count), cols = vars(er_count))
 ```
-```{r}
+
+```{r, eval=F}
 tmp = control
 er_claim=0
 hospital_claim=0
@@ -305,7 +309,7 @@ tmp %>% ggplot() + geom_point(aes(x=time,y=log(rx_claim),color=factor(rx_count))
 tmp %>% ggplot() + geom_point(aes(x=time,y=log(pcp_claim),color=factor(pcp_count)),alpha=0.3)+ ylim(4,10)
 ```
 
-```{r}
+```{r, eval=F}
 attach(control)
 tmp = control
 model1 = lm(log(agg_claim+1)~er_count*hospital_count*rx_count*pcp_count+
@@ -333,7 +337,6 @@ ggplot(data=tmp) + geom_density(aes(x=age))
 ggplot(data=tmp) + geom_bar(aes(x=factor(chronic_count)))
 ```
 
-
 ```{r Build model for before and after outreach, eval=F}
 attach(impact)
 tmp = impact
@@ -355,7 +358,7 @@ tmp = tmp %>% cbind(fit = fitted(model1),res = residuals(model1))
 
 ```
 
-```{r calculate monthly avg for before and after}
+```{r calculate monthly avg for before and after, eval=F}
 impact %>% 
     group_by(after_crd,time) %>% 
     summarize(monthly_total_count = mean(total_count),
@@ -384,7 +387,7 @@ impact %>%
     geom_smooth(method="lm")
 ```
 
-```{r}
+```{r, eval=F}
 a = impact %>% 
         filter(after_crd==F) %>% 
         group_by(mth_out,time) %>% 
@@ -411,5 +414,180 @@ ggplot(mapping = aes(x=time,y=monthly_total_count,color=factor(mth_out)))+
         #geom_point(data=b)+
         geom_smooth(data=b,method="lm",se=F)+
         geom_smooth(data=c,se=T)
+```
+
+
+
+```{r Separate data in to control and not_control group}
+not_control = impact %>% filter(!is.na(mth_out))
+control = impact %>% filter(is.na(mth_out))
+```
+
+```{r, by crd only, eval = F}
+signif_level = 0.05
+test_type = "greater"
+
+### Raw comparison
+tmp = not_control %>% group_by(crd,after_crd,id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key=after_crd,value=avg_mthly_claim) %>% ungroup()
+
+is_effective=tmp$`TRUE`<tmp$`FALSE`
+
+tmp = tmp %>% cbind(eff=is_effective)
+x = tmp %>% group_by(crd) %>%
+        summarize(n_eff=sum(eff),
+                  n_not_eff=sum(!eff),
+                  n=n(),
+                  eff_prop=mean(eff))
+
+## Test for Normality
+tmp = not_control %>% group_by(crd, after_crd, id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key = after_crd, value = avg_mthly_claim) %>% ungroup()
+
+diff = tmp$`FALSE` - tmp$`TRUE`
+shapiro.test(diff) #small p-value, not Normal, note sample size big
+ks.test(diff,"pnorm") #small p-value, not Normal, note sample size big
+ggqqplot(diff) #looking at qqplot and density, pretty Normal
+ggplot()+geom_density(aes(x=diff))
+
+## Test for significance in difference
+
+#paired t test - assume Normal
+not_control %>% group_by(crd, 
+                         after_crd, id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key = after_crd, value = avg_mthly_claim) %>% 
+        ungroup() %>% group_by(crd) %>% 
+        do(tidy(t.test(.$`FALSE`, .$`TRUE`, data=., 
+               alternative = test_type, paired = TRUE))) %>% 
+        mutate(is_eff = p.value<signif_level) %>% 
+        select(crd, 
+               is_eff) %>% data.frame(x) 
+        
+#wilcoxon signed-rank test - not Normal
+not_control %>% group_by(crd, 
+                         after_crd, id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key = after_crd, value = avg_mthly_claim) %>% 
+        ungroup() %>% group_by(crd) %>% 
+        do(tidy(wilcox.test(.$`FALSE`, .$`TRUE`, data=., 
+                       alternative = test_type, paired = TRUE))) %>% 
+        mutate(is_eff = p.value<signif_level) %>% 
+        select(crd, 
+               is_eff) %>% data.frame(x) 
+```
+```{r, by all attribute besides age, eval = F}
+tmp = not_control %>% group_by(age,gender,chronic_count,
+                               is_lowincome,rural,region,crd,
+                               after_crd,id) %>% 
+    summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+    spread(key=after_crd,value=avg_mthly_claim) %>% ungroup()
+
+is_effective=tmp$`TRUE`<tmp$`FALSE`
+tmp = tmp %>% cbind(eff=is_effective)
+
+x = tmp %>% group_by(age,gender,chronic_count,
+                 is_lowincome,rural,region,crd) %>%
+    summarize(n_eff=sum(eff),
+              n=sum(eff+!eff),
+              eff_prop=mean(eff))
+```
+```{r, by all attribute, eval = F}
+signif_level = 0.05
+test_type = "greater"
+
+### Raw comparison
+tmp = not_control %>% group_by(age,gender,chronic_count,
+                 is_lowincome,rural,region,crd,
+                 after_crd,id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key=after_crd,value=avg_mthly_claim) %>% ungroup()
+
+is_effective=tmp$`TRUE`<tmp$`FALSE`
+
+tmp = tmp %>% cbind(eff=is_effective)
+x = tmp %>% group_by(age,gender,chronic_count,
+                 is_lowincome,rural,region,crd) %>%
+        summarize(n_eff=sum(eff),
+                  n_not_eff=sum(!eff),
+                  n=n(),
+                  eff_prop=mean(eff))
+
+## Test for Normality
+tmp = not_control %>% group_by(age,gender,chronic_count,
+                 is_lowincome,rural,region,crd,
+                 after_crd, id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key = after_crd, value = avg_mthly_claim) %>% ungroup()
+
+diff = tmp$`FALSE` - tmp$`TRUE`
+shapiro.test(diff) #small p-value, not Normal, note sample size big
+ks.test(diff,"pnorm") #small p-value, not Normal, note sample size big
+ggqqplot(diff) #looking at qqplot and density, pretty Normal
+ggplot()+geom_density(aes(x=diff))
+
+## Test for significance in difference
+
+#paired t test - assume Normal
+not_control %>% group_by(age,gender,chronic_count,
+                 is_lowincome,rural,region,crd,
+                 after_crd, id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key = after_crd, value = avg_mthly_claim) %>% 
+        ungroup() %>% group_by(age,gender,chronic_count,
+                 is_lowincome,rural,region,crd) %>% 
+        do(tidy(t.test(.$`FALSE`, .$`TRUE`, data=., 
+               alternative = test_type, paired = TRUE))) %>% 
+        mutate(is_eff = p.value<signif_level) %>% 
+        select(age,gender,chronic_count,
+               is_lowincome,rural,region,crd,
+               is_eff) %>% data.frame(x) 
+        
+#wilcoxon signed-rank test - not Normal
+x = not_control %>% group_by(age,gender,chronic_count,
+                         is_lowincome,rural,region,crd, 
+                         after_crd, id) %>% 
+        summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+        spread(key = after_crd, value = avg_mthly_claim) %>% 
+        ungroup() %>% group_by(age,gender,chronic_count,
+                 is_lowincome,rural,region,crd) %>% 
+        do(tidy(wilcox.test(.$`FALSE`, .$`TRUE`, data=., 
+                       alternative = test_type, paired = TRUE))) %>% 
+        mutate(is_eff = p.value<signif_level) %>% 
+        select(age,gender,chronic_count,
+               is_lowincome,rural,region,crd,
+               is_eff) %>% data.frame(x) %>% 
+    select(age,gender,chronic_count,
+           is_lowincome,rural,region,crd,
+           n_eff,n_not_eff,n,eff_prop,
+           is_eff)
+```
+
+```{r, fig.width=9000, fig.height=800}
+t=list()
+tmp=list()
+for(i in 1:4){
+        tmp[[i]] = not_control %>% filter(crd == i)
+        
+        df = tmp[[i]] %>% group_by(after_crd,id) %>% 
+                summarize(avg_mthly_claim = mean(agg_claim)) %>% 
+                spread(key=after_crd,value=avg_mthly_claim) %>% ungroup()
+        
+        is_effective=ifelse(df$`TRUE`<df$`FALSE`,"Y","N")
+        
+        df = df %>% cbind(is_eff=is_effective)
+        df = df %>% inner_join(demo,by="id") %>% 
+                select(-c("FALSE","TRUE","id","mth_out","crd")) %>% 
+                mutate(is_lowincome=as.factor(is_lowincome),
+                       region=as.factor(region),
+                       rural=as.factor(rural),
+                       gender=as.factor(gender)
+                )
+        
+        t[[i]] = C5.0(is_eff~.-is_eff, data=df)
+        print(summary(t[[i]]))
+}
 ```
 
